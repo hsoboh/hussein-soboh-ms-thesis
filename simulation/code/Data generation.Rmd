@@ -1,0 +1,124 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r import R scripts}
+source("alternative_def.R")
+source("utils.R")
+
+```
+
+```{r }
+
+set.seed(666)
+#set.seed(222) for weibull
+
+library("extraDistr") #rtlambda 
+library("truncnorm") #rtruncnorm
+
+generate_samples<-function(sizes){
+  
+  process_sample<-function(s, family, dist, alternative){
+    
+    #Calc features
+    scaled_s <- scale(s)
+ 
+    size <- length(scaled_s)
+    
+    stats = calc_stats(scaled_s)
+    
+    #sample_id
+    sample_id <- paste(family, dist, size, sep = "-")
+    
+    data_set[nrow(data_set) + 1, ] = c(sample_id, family, dist, stats, alternative)
+    
+    write(x = scaled_s, file = paste(data_files_dir, "/", sample_id, sep = ""), ncolumns = 1)
+    
+    return(data_set)
+  }
+  
+  
+  data_set <- data.frame(sample_id=character(0), dist_family=character(0), dist=character(0), size=integer(0), mean=numeric(0), median=numeric(0), mean_median=numeric(0), sd=numeric(0), skewness=numeric(0), kurtosis=numeric(0), outliers_minor=integer(0), outliers_extream=integer(0), sigma_1_ratio=numeric(0), sigma_2_ratio=numeric(0), sigma_3_ratio=numeric(0), alternative=integer(0), stringsAsFactors = FALSE) 
+ 
+  
+  for(size in sizes){
+    print(paste("Processing samples of size ", size, sep = ""))
+    
+    ############ Close to normal
+    family <- "close_normal"
+    
+    for(dist in dist_ctn){
+      s <- create_alternative_sample(dist, size)
+      data_set <- process_sample(s, family, dist, 1)
+    }
+    
+  
+    ############ Symmetric long-tailed
+    family <- "sym_long_tail"
+    
+    for(dist in dist_slt){
+      s <- create_alternative_sample(dist, size)
+      data_set <- process_sample(s, family, dist, 1)
+    }
+   
+    ############# Symmetric short-tailed
+    family <- "sym_short_tail"
+    for(dist in dist_sst){
+      s <- create_alternative_sample(dist, size)
+      data_set <- process_sample(s, family, dist, 1)
+    }
+    
+   
+    ############# Asymmetric long-tailed
+    family <- "asym_long_tail"
+    
+    for(dist in dist_alt){
+      s <- create_alternative_sample(dist, size)
+      data_set <- process_sample(s, family, dist, 1)
+    }
+  
+    
+    ############# Asymmetric short-tailed
+    family <- "asym_short_tail"
+    
+    for(dist in dist_ast){
+      s <- create_alternative_sample(dist, size)
+      data_set <- process_sample(s, family, dist, 1)
+    }
+    
+   
+    ############ Normal
+     
+    #To make sure we get in all runs the same means and sd 
+    #I don't why the set.seed out the loop does not work here 
+    set.seed(666)
+    norm_mean = as.integer(runif(5, -1000, 1000))
+    
+    norm_cov <- c(0.01, 0.1, 0.2, 0.4, 0.6) #coeffienent of variation
+    for(mu in norm_mean){
+      for(cov in norm_cov){
+        family <- paste("normal(", cov, ")", sep = "")
+        
+        sd = round(abs(cov*mu), 3)
+        
+        s <- rnorm(n = size, mean = mu, sd = sd)
+      
+        data_set <- process_sample(s, family, paste("Normal", mu, sd, sep = "_"), 0)   
+      }
+    }
+  }
+  
+  
+  write.csv(data_set, file=data_file)
+}
+
+#"Generate samples"
+pop <- unique(as.integer(runif(n = 1000000, min = 5, max = 2000)))
+sizes <- sort(sample(x= pop, size = 200, replace = FALSE))
+#set.seed(222) for weibull (5->4500)
+#sizes <- unique(sort(as.integer((rweibull(n = 229, shape = 1, scale = 5)*100 + 5))))
+
+generate_samples(sizes)
+
+```

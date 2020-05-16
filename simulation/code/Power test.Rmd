@@ -1,0 +1,275 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+#import R scripts
+```{r}
+source("alternative_def.R")
+source("utils.R")
+```
+
+
+#util functions and constants
+```{r}
+predict_score<-function(model, sample){
+  x <- calc_sample_features(sample)
+  pred <- predict( model, type = "prob", newdata = x)
+  return(pred$class_1)
+}
+
+get_power_threshold<-function(model, alpha){
+   thr <- power_thresholds_df[power_thresholds_df$model==model$method & power_thresholds_df$test_set=="dev" , c(paste("th_", alpha, sep = ""))]
+   return(thr)
+}
+
+n_grid<-c(10,30, 50, 100, 200, 500, 1000)
+alph_grid<-c(0.01, 0.05, 0.1)
+test_grid<-c(model_names, "SW", "KS","AD", "CVM", "Lillie", "SF", "JB")   
+
+
+```
+
+
+#load models and thresholds
+```{r}
+model_list <- list()
+for(name in model_names){
+  file <- paste(models_dir , "/", name, ".rds", sep = "")
+  model <- readRDS(file)
+  model_list[[name]] = model
+}
+
+power_thresholds_df <- read.csv(power_thresholds_file)
+```
+
+```{r}
+library("nortest") #cvm, lillie, ad  
+s <- rt(100,3)
+s <- rnorm(100, 100, 10)
+print(ad.test(s))
+print(ks.test(s, "pnorm", mean=mean(s), sd = sd(s)))
+help(ks.test)
+
+f <- shapiro.test(s)
+f$statistic
+```
+
+
+#MonteCarlo simulation
+```{r }
+library(MonteCarlo)
+library("nortest") #AD, cvm, lillie #https://cran.r-project.org/web/packages/nortest/nortest.pdf
+library("extraDistr") #rtlambda 
+library("truncnorm") #rtruncnorm
+library("tseries") #jarque.bera.test 
+library(parallel)
+library(MASS)
+
+test_is_alternative<-function(model, sample, alpha){
+  pred <- predict_score(model, sample)
+  thr <- get_power_threshold(model, alpha)
+  return(pred > thr)
+}
+
+normality_test<-function(n, dist, test, alpha, family){
+  sample <- create_alternative_sample(dist = dist, size = n)
+  help(ks.test)
+  if(test == "SW"){ #Shapiro
+    test_result <- shapiro.test(sample)
+    decision <- test_result$p.value <= alpha
+  }else if (test == "KS"){#KS
+    test_result <- ks.test(sample, "pnorm", mean=mean(s), sd = sd(s))
+    decision <- test_result$p.value <= alpha
+  }else if (test == "AD"){ #Anderson Darling
+    test_result <- ad.test(sample)  
+    decision <- test_result$p.value <= alpha
+  }else if(test == "CVM"){#Cramer-von Mises Test
+    test_result <- cvm.test(sample)  
+    decision <- test_result$p.value <= alpha
+  }else if(test == "Lillie"){ #Lilliefors
+    test_result <- lillie.test(sample)  
+    decision <- test_result$p.value <= alpha
+  }else if(test == "SF"){ "Shapiro-Francia"
+    test_result <- sf.test(sample)  
+    decision <- test_result$p.value <= alpha
+  }else if(test == "JB"){ #Jarque-Bera
+    test_result <- jarque.bera.test(sample)  
+    decision <- test_result$p.value <= alpha
+  }else if(test %in% model_names){ #Proposed tests
+    decision = test_is_alternative(model_list[[test]], sample, alpha) == 1
+  }else {
+    stop(paste("normality_test: Not handled test", test))
+  }
+  
+  # return result:
+  return(list("power"=decision))
+}
+
+run_test<-function(family, dists){
+  set.seed(100)
+ 
+  dist_grid<-dists
+  family_grid <- list(family)
+  
+  param_list=list("n"=n_grid, "dist"=dist_grid, "test"=test_grid, "alpha"=alph_grid, "family"=family_grid)
+  
+  system.time({
+    MC_result<-MonteCarlo(func=normality_test, nrep=1000, param_list=param_list, ncpus = 1)#, max_grid = 5000, export_also = list("data"="power_thresholds_df")) 
+    
+    saveRDS(MC_result, paste(power_dir, "/",family, ".rds", sep = ""))
+    
+    df<-MakeFrame(MC_result)
+    write.csv(df, paste(power_dir, "/",family, ".csv", sep = ""))
+  })
+}
+
+run_test("ctn", dist_ctn)
+run_test("alt", dist_alt)
+run_test("slt", dist_slt)
+run_test("ast", dist_ast)
+run_test("sst", dist_sst)
+
+```
+
+
+
+#Generate reports
+```{r}
+library("dplyr")
+library("tables")
+library("reshape")
+library("etable") 
+library("xlsx")
+
+families <- list("ctn", "alt", "ast", "slt", "sst")
+
+df_all<- data.frame()
+
+for(f in families){
+    df <- read.csv(paste(power_dir, "/",f, ".csv", sep = ""))
+    df_all <- rbind(df_all, df)    
+}
+
+aggregations = df_all %>% group_by(family, dist, n, test, alpha) %>% summarise(power = mean(power))
+
+same_cell<- function(x, y, z, w, cell_ids, row_ids, col_ids, vnames, vars, n_min){
+  out<- round(x[cell_ids], digits = 2)
+  return(out)
+}
+
+mean_cell<- function(x, y, z, w, cell_ids, row_ids, col_ids, vnames, vars, n_min){
+  out<- round(mean(x[cell_ids]), digits = 2)
+  return(out)
+}
+
+#Calculate details table
+detailed_t <- tabular.ade(x_vars = 'power', rows = c('dist','n'), rnames = c('Distribution', 'Size'), cols = c('test','alpha'), cnames = c('Test', 'Alpha'), data=aggregations, FUN = same_cell)
+detailed_table <- xtable(detailed_t, caption='Power test results', caption.placement="top") 
+
+#Calculate family level table
+family_t <- tabular.ade(x_vars = 'power', rows = c('family','n'), rnames = c('Family', 'Size'), cols = c('test','alpha'), cnames = c('Test', 'Alpha'), data=aggregations, FUN = mean_cell)
+family_table <- xtable(family_t, caption='Power test results on distribution families', caption.placement="top") 
+
+#Calculate overall table
+overall_t <- tabular.ade(x_vars = 'power', rows = c('n'), rnames = c('Size'), cols = c('test','alpha'), cnames = c('Test', 'Alpha'), data=aggregations, FUN = mean_cell)
+overall_table <- xtable(overall_t, caption='Overall power test results', caption.placement="top")
+
+write.xlsx(x = overall_table, file = paste(power_dir, "/power_comparions.xlsx", sep = ""), sheetName = "overall", append = FALSE)
+write.xlsx(x = family_table, file = paste(power_dir, "/power_comparions.xlsx", sep = ""), sheetName = "Per family", append = TRUE)
+write.xlsx(x = detailed_table, file = paste(power_dir, "/power_comparions.xlsx", sep = ""), sheetName = "Per distribution", append = TRUE)
+
+```
+
+
+#load results
+```{r eval = FALSE}
+library(MonteCarlo)
+
+result<-readRDS(paste(power_dir, "/sst.rds", sep = ""))
+# generate table:
+MakeTable(output=result, rows=c("n", "dist"), cols=c("alpha","test"), digits=2, include_meta=FALSE)
+```
+
+
+#MonteCarlo simulation 2
+```{r eval = FALSE}
+library("nortest") #AD test
+library("extraDistr") #rtlambda 
+library("truncnorm") #rtruncnorm
+
+power_results <- data.frame(dist = character(0), size = numeric(0), test = character(0), alpha= numeric(0), score = numeric(0), alternative = integer(0), stringsAsFactors = FALSE )
+
+alph_grid<-c(0.01, 0.05, 0.1)
+dist_grid<-dist_alt
+test_grid<-c("rf","svmRadial","knn","SW","KS","AD")
+n_grid<-c(10,30, 50, 100, 200, 500, 1000)
+
+set.seed(100)
+
+library(foreach)
+library(doParallel)
+numCores <- detectCores()
+registerDoParallel(numCores)  # use multicore, set to the number of our cores
+
+repetitions <- 1000
+# create progress bar
+pb <- txtProgressBar(min = 0, max = repetitions, style = 3)
+#progress <- function(n) setTxtProgressBar(pb, n)
+#opts <- list(progress = progress)
+
+system.time({
+  for(i in 1:repetitions){
+    print(paste("Handle repetition", i, sep = " "))
+    set.seed(i)
+  
+  
+  #power_results_df <- foreach(icount(repetitions), .combine=rbind, .packages=c("extraDistr", #
+  #"moments", "nortest", "truncnorm"), .options.snow = opts) %dopar% {
+    
+    for(dist in dist_alternatives){
+      df <- data.frame(dist = character(0), size = numeric(0), test = character(0), alpha= numeric(0), score = numeric(0), alternative = integer(0), stringsAsFactors = FALSE )
+      
+      #print(paste("Processing distribution", dist, sep = " "))
+      for(size in n_grid){
+        #print(paste("Processing distribution", dist,  "size", size, sep = " "))
+        sample <- create_alternative_sample(dist = dist, size = size)
+        for(test in test_grid){
+          if(test %in% c("rf", "svmRadial","knn")){
+            score = predict_score(model_list[[test]], sample)
+            for(alpha in alph_grid){
+              thr <-get_power_threshold(test, alpha)
+              alternative <- score >= thr
+              #df <- rbind(df, data.frame(dist = dist, size = size, test = test, alpha = alpha, score = score, alternative = alternative))
+              power_results <-rbind(power_results, data.frame(dist = dist, size = size, test = test, alpha = alpha, score = score, alternative = alternative))
+            }
+          }else if(test %in% c("SW", "KS", "AD")){
+             if(test == "SW"){ #Shapiro
+                test_result <- shapiro.test(sample)
+              }else if (test == "KS"){#KS
+                test_result <- ks.test(sample, "pnorm", mean=mean(sample), sd=sd(sample))
+              }else if (test == "AD"){ #Anderson Darling
+                test_result <- ad.test(sample)  
+              }else {
+                stop(paste("Not handled test 2", test))
+              }
+              for(alpha in alph_grid){
+                alternative <- test_result$p.value <= alpha
+              #  df <- rbind(df, data.frame(dist = dist, size = size, test = test, alpha = alpha, score=test_result$p.value, alternative = alternative  ))
+                power_results <-rbind(power_results, data.frame(dist = dist, size = size, test = test, alpha = alpha, score=test_result$p.value, alternative = alternative  ))
+              }
+          }else{
+            stop(paste("Not handled test", test))
+          }
+        }
+      }
+    }
+    #return(df)
+  #}
+    setTxtProgressBar(pb, i)
+  }
+})
+
+close(pb)
+
+```

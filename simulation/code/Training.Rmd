@@ -1,0 +1,391 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+#import R scripts
+```{r}
+source("alternative_def.R")
+source("utils.R")
+```
+
+#Load data
+```{r "Load data"}
+
+all_data <- read.csv(data_file)
+all_data <- subset(all_data, select = -c(X)) #Remove x(index) column  
+
+#This needed in order to use classProbs = TRUE in the control. It uses the value as name and the name can't start with number
+all_data <- transform(all_data, alternative=ifelse(alternative==1, "class_1", "class_0"))
+
+all_data$alternative <- as.factor(all_data$alternative)
+
+```
+
+#Examining data
+```{r}
+library("caret")
+library(corrplot)
+x <- all_data[, 4:15]
+y <- all_data[,16]
+summary(all_data)
+
+# boxplot for each attribute on one image
+par(mfrow=c(1,length(x)))
+#for(i in 1:length(x)) {
+#  boxplot(x[,i], main=names(x)[i])
+#}
+
+
+# scatterplot matrix
+featurePlot(x=x, y=y, plot="pairs", auto.key=list(columns=2))
+
+# density plots for each attribute by class value
+featurePlot(x=x, y=y, plot="density", scales=list(x=list(relation="free"), y=list(relation="free")), auto.key=list(columns=2))
+
+
+# calculate correlation matrix
+dev.off()
+correlationMatrix <- cor(x, use = "complete.obs")
+corrplot(correlationMatrix, method = "circle", type="lower", diag=FALSE, mar = c(1, 1, 1, 1))
+print(correlationMatrix)
+# find attributes that are highly corrected (ideally >0.75)
+#highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.75)
+# print indexes of highly correlated attributes
+#print(highlyCorrelated)
+
+```
+
+#Split data
+```{r}
+split_data<-function(data){
+  unseen_alternatives_dist <- list("tukey(0.1)", "t(1)", "uniform(0,1)", "Weibull(0.5,1)", "beta(2,1)")
+  
+   unseen = data[which(data$dist %in% unseen_alternatives_dist | data$dist_family == 'normal(0.6)'), ]
+  
+   seen = data[which(!(data$dist %in% unseen_alternatives_dist) & data$dist_family != 'normal(0.6)'), ]
+  
+  #unseen = data[which(data$dist_family == 'asym_short_tail' | data$dist_family == 'normal(0.6)'), ]
+  #seen = data[which(data$dist_family != 'asym_short_tail' & data$dist_family != 'normal(0.6)'), ]
+  
+  #Split data to train,dev,test
+  spec = c(train = .6, dev = .2, test = .2)
+  g = sample(cut(
+    seq(nrow(seen)), 
+    nrow(seen)*cumsum(c(0,spec)),
+    labels = names(spec)
+  ))
+  res = split(seen, g)
+  
+  train_data <- res$train
+  dev_data <- res$dev
+  test_data <- res$test
+  return(list(train=train_data, test = test_data, dev = dev_data, unseen = unseen))
+}
+
+
+#### split to train and test
+splitted_data = split_data(all_data)
+train_set = splitted_data$train
+dev_set = splitted_data$dev
+test_set = splitted_data$test
+unseen_set = splitted_data$unseen
+```
+
+
+#Build models
+```{r}
+library("randomForest")
+library("e1071")
+library("caret")
+library("doParallel")
+library("caretEnsemble")
+
+train_models<-function(train_data){
+  #set up parallel processing
+  registerDoParallel(8)
+  num_of_workers<-getDoParWorkers()
+  print(paste("Number of workers =", num_of_workers, sep = " " ))
+  
+  # Define the control
+  trControl <- trainControl(method = "cv",
+                            number = 10,
+                            classProbs = TRUE,
+                            savePredictions = "all",
+                            search = "grid",
+                            allowParallel = TRUE)
+  
+  # Run the models
+  
+  models <- caretList(alternative ~ 
+                        size
+                      #+ median
+                      + mean_median
+                      + skewness 
+                      + kurtosis 
+                      #+ outliers_minor 
+                      #+ outliers_extream 
+                      + sigma_1_ratio 
+                      + sigma_2_ratio 
+                      + sigma_3_ratio,
+      data = train_data,
+      methodList = model_names,
+      metric = "Accuracy",
+      continue_on_fail = FALSE, 
+      trControl = trControl)
+  return(models)  
+}
+
+#Automation flow
+set.seed(100)
+
+##### train the models
+model_list <- train_models(train_set)
+
+for(model in model_list){
+  print(model)
+}
+
+```
+
+#save models
+```{r}
+#### save models 
+for(name in model_names){
+  file <- paste(models_dir , "/", name, ".rds", sep = "")
+  saveRDS(model_list[[name]], file = file, compress = FALSE )
+}
+
+```
+
+#load models
+```{r eval = FALSE}
+model_list <- list()
+for(name in model_names){
+  file <- paste(models_dir , "/", name, ".rds", sep = "")
+  model <- readRDS(file)
+  model_list[[name]] = model
+}
+
+```
+
+
+#Evaluate models
+```{r}
+library("ggplot2")
+library("pROC")
+library(dplyr)
+
+#Function to caclulate the sensitivity, specificity, accuracy
+calc_statistics<-function(actual_classes, predictions){
+ 
+  df <- data.frame(threshold = numeric(0), tp = numeric(0), fp = numeric(0), fn = numeric(0), tn = numeric(0), sensitivity = numeric(0), specificity = numeric(0), accuracy = numeric(0), stringsAsFactors = FALSE )
+  
+  #Create sequence of thresholds
+  thresholds<-seq(0.0,1,by=0.05)
+  
+  for(threshold in thresholds){
+    tp<-0
+    fp<-0
+    tn<-0
+    fn<-0
+    for(i in 1:length(predictions)){
+      pred<-predictions[i]
+      actual <- actual_classes[i]
+      if(actual == "class_1"){
+        if(pred >= threshold){
+          tp = tp + 1
+        }else{
+          fn = fn + 1
+        }
+      }else{
+        if(pred >= threshold){
+          fp = fp + 1
+        }else{
+          tn = tn + 1
+        }
+      }
+    }
+    sensitivity<-ifelse(tp+fn==0,0,tp/(tp+fn))
+    specificity<-ifelse(tn+fp==0,0,tn/(tn+fp))
+    accuracy<-(tp+tn)/(tp+fp+tn+fn)
+    
+    df[nrow(df) + 1, ] = c(threshold, tp, fp, fn, tn, sensitivity, specificity, accuracy)
+  }
+  return(df)
+  
+}
+
+
+calc_power_thresholds<-function(statistics){
+  #Calculate thresholds for 0.1, 0.05, 0.01 alpha
+  # alpha  = fpr = 1 - Specificity => we search for Specificity 0.99, 0.95, 0.90
+  # power = recall = sensitivity = tpr
+  thr_0.10 <- statistics[which.min(abs(0.90 - statistics$specificity)), c("threshold")]
+  thr_0.05 <- statistics[which.min(abs(0.95 - statistics$specificity)), c("threshold")]
+  thr_0.01 <- statistics[which.min(abs(0.99 - statistics$specificity)), c("threshold")]
+  thresholds <- list("th_0.1" = thr_0.10, "th_0.05" = thr_0.05, "th_0.01" = thr_0.01)
+  return(thresholds) 
+}
+
+run_test<-function(test_set, test_set_name, model, applied_threshold){#TODO: threshold maybe not needed
+  pred <- predict(model,  newdata = test_set, type = "prob")
+  pred$class <- apply(pred, MARGIN=1, FUN = function(x) ifelse(x["class_1"] >= applied_threshold, "class_1", "class_0"))
+  pred$class <- as.factor(pred$class)
+  
+  matrix <-confusionMatrix(pred$class, test_set$alternative, positive = "class_1")
+  print(matrix)
+  
+  # Compute roc
+  test.roc <- roc(test_set$alternative, pred$class_1 )
+  
+  #statistics_df <- data.frame(model=character(0), test_set = character(0), threshold = numeric(0), tp = numeric(0), fp = numeric(0), fn = numeric(0), tn = numeric(0), sensitivity = numeric(0), specificity = numeric(0), accuracy = numeric(0), stringsAsFactors = FALSE )
+  
+  stats <- calc_statistics(test_set$alternative, pred$class_1)
+  stats$model <- model$method
+  stats$test_set <- test_set_name
+  
+  instance_report_df <- test_set
+  instance_report_df$model <- model$method
+  instance_report_df$test_set <- test_set_name
+  instance_report_df$actual <- instance_report_df$alternative
+  instance_report_df <- instance_report_df[, !(names(instance_report_df) %in% c("alternative"))]
+  instance_report_df$predicted <- pred$class
+  instance_report_df$score <- pred$class_1
+  instance_report_df$threshold <- applied_threshold
+  
+  determine_error_type<-function(row){
+    actual_class <- row["actual"]
+    predicted_class<-row["predicted"]
+    
+    if(actual_class == "class_1"){
+      if(predicted_class == "class_1"){
+        return("TP")
+      }else{
+        return("FN")
+      }
+    }else{
+      if(predicted_class == "class_1"){
+        return("FP")
+      }else{
+        return("TN")
+      }
+    }
+  }
+  
+  instance_report_df$type <- apply(instance_report_df,  MARGIN=1, FUN = function(x) determine_error_type(x))
+
+  return(list(stats=stats, roc_auc = test.roc$auc, instance_report = instance_report_df))
+}
+
+all_summary_df <- data.frame(model=character(0), test_set=character(0), threshold=numeric(0), roc_auc = numeric(0), sensitivity = numeric(0), specificity = numeric(0), accuracy = numeric(0), stringsAsFactors = FALSE)
+
+all_statistics_df <- data.frame(model=character(0), test_set = character(0), threshold = numeric(0), tp = numeric(0), fp = numeric(0), fn = numeric(0), tn = numeric(0), sensitivity = numeric(0), specificity = numeric(0), accuracy = numeric(0), stringsAsFactors = FALSE )
+
+##### Test models
+power_thresholds_df <- data.frame(model=character(0), test_set = character(0), "th_0.1" = numeric(0), "th_0.05" = numeric(0), "th_0.01" = numeric(0), stringsAsFactors = FALSE)
+power_thresholds_matrix <- matrix(ncol= 5, )
+
+for(model in model_list){
+  model_name <- model$method
+  print(paste("Calculating quality on model", model_name, sep = " "))
+  
+  #Retrieve best threshold based on dev set
+  predDev_prob <- predict(model,  newdata = dev_set, type = "prob")
+  dev.roc <- roc(dev_set$alternative, predDev_prob$class_1)
+  applied_threshold <- coords(dev.roc, "best", ret = "threshold")$threshold
+  print(paste("Best threshold ", applied_threshold))
+  
+  #Calculate quality on dev, test, unseen data
+  sets <- list("dev"=dev_set, "test"=test_set, "unseen"=unseen_set)
+  for(set_name in names(sets)){
+    print(paste("Calculating quality on", set_name, "set", sep = " "))
+    set <-sets[[set_name]]
+    
+    #Run test and get back statistics
+    stats_and_roc <- run_test(set, set_name, model, applied_threshold)
+    all_statistics_df <- rbind(all_statistics_df, stats_and_roc$stats)
+    instance_report <- stats_and_roc$instance_report
+    write.csv(x = instance_report, file = paste(stats_dir, "/instance_report-", model_name, "-", set_name, ".csv", sep = ""))
+      
+    #Calculate thresholds on severals alpha
+    power_thresholds<-calc_power_thresholds(stats_and_roc$stats)
+    power_thresholds_df <- rbind(power_thresholds_df, data.frame(model = model_name, test_set=set_name, "th_0.1"=power_thresholds$th_0.1, "th_0.05"=power_thresholds$th_0.05, "th_0.01"=power_thresholds$th_0.01))
+    
+    #Calculate quality on applied threshold 
+    stat <- stats_and_roc$stats[which.min(abs(applied_threshold - stats_and_roc$stats$threshold)) ,]
+    all_summary_df <- rbind(all_summary_df, data.frame(model=model_name, test_set=set_name, threshold=applied_threshold, roc_auc=stats_and_roc$roc_auc, sensitivity=stat$sensitivity, specificity=stat$specificity, accuracy=stat$accuracy))
+  }
+}
+
+dev_stats<- all_statistics_df[all_statistics_df$test_set=="dev",]
+ggplot(dev_stats, aes(specificity, sensitivity)) + 
+  geom_path(aes(color = model))+
+  scale_x_reverse(expand = c(0,0))+
+  scale_y_continuous(expand = c(0,0))+
+  geom_abline(intercept = 1, slope = 1, linetype = "dashed")+
+  ggtitle(paste("ROC of dev set")) +
+  theme_bw()
+
+test_stats<- all_statistics_df[all_statistics_df$test_set=="test",]
+ggplot(test_stats, aes(specificity, sensitivity)) + 
+  geom_path(aes(color = model))+
+  scale_x_reverse(expand = c(0,0))+
+  scale_y_continuous(expand = c(0,0))+
+  geom_abline(intercept = 1, slope = 1, linetype = "dashed")+
+  ggtitle(paste("ROC of test set")) +
+  theme_bw()
+
+unseen_stats<- all_statistics_df[all_statistics_df$test_set=="unseen",]
+ggplot(unseen_stats, aes(specificity, sensitivity)) + 
+  geom_path(aes(color = model))+
+  scale_x_reverse(expand = c(0,0))+
+  scale_y_continuous(expand = c(0,0))+
+  geom_abline(intercept = 1, slope = 1, linetype = "dashed")+
+  ggtitle(paste("ROC of unseen data")) +
+  theme_bw()
+
+
+print(power_thresholds_df)
+print(all_summary_df)
+print(all_statistics_df)
+
+write.csv(x = power_thresholds_df, file = power_thresholds_file)
+write.csv(x = all_summary_df, file = summary_stats_file)
+write.csv(x = all_statistics_df, file = stats_file)
+
+```
+
+#Feature selection
+```{r eval = TRUE }
+#library(mlbench)
+library(caret)
+
+####### Feature importance
+# prepare training scheme
+#control <- trainControl(method="repeatedcv", number=10, repeats=3)
+# train the model
+#model <- train(alternative~size + median + skewness + kurtosis + outliers_extream + outliers_minor, data=all_data, method="lvq", preProcess="scale", trControl=control)
+# estimate variable importance
+for( model in list(model_list$rf, model_list$svmRadialSigma)){
+  print(model$method)
+  importance <- varImp(model, scale=FALSE)
+  # summarize importance
+  print(importance)
+  # plot importance
+  plot(importance)  
+}
+
+```
+
+
+#Error analysis
+```{r eval = FALSE }
+file <- ""
+s <- paste("D:\master\thesis\simulation\data_3_mean-median\files\", file, sep = "")
+
+```
+
+
+
+
