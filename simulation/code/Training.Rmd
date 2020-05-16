@@ -31,24 +31,23 @@ y <- all_data[,16]
 summary(all_data)
 
 # boxplot for each attribute on one image
-par(mfrow=c(1,length(x)))
-#for(i in 1:length(x)) {
-#  boxplot(x[,i], main=names(x)[i])
-#}
-
+#par(mfrow=c(1,length(x)))
+for(i in 1:length(x)) {
+  boxplot(x[,i], main=names(x)[i])
+}
 
 # scatterplot matrix
-featurePlot(x=x, y=y, plot="pairs", auto.key=list(columns=2))
+#featurePlot(x=x, y=y, plot="pairs", auto.key=list(columns=2))
 
 # density plots for each attribute by class value
 featurePlot(x=x, y=y, plot="density", scales=list(x=list(relation="free"), y=list(relation="free")), auto.key=list(columns=2))
 
 
 # calculate correlation matrix
-dev.off()
+#dev.off()
 correlationMatrix <- cor(x, use = "complete.obs")
-corrplot(correlationMatrix, method = "circle", type="lower", diag=FALSE, mar = c(1, 1, 1, 1))
-print(correlationMatrix)
+corrplot(correlationMatrix, method = "circle", diag=FALSE, mar = c(1, 1, 1, 1))
+#print(correlationMatrix)
 # find attributes that are highly corrected (ideally >0.75)
 #highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.75)
 # print indexes of highly correlated attributes
@@ -85,11 +84,13 @@ split_data<-function(data){
 
 
 #### split to train and test
+set.seed(100)
 splitted_data = split_data(all_data)
 train_set = splitted_data$train
 dev_set = splitted_data$dev
 test_set = splitted_data$test
 unseen_set = splitted_data$unseen
+
 ```
 
 
@@ -119,12 +120,12 @@ train_models<-function(train_data){
   
   models <- caretList(alternative ~ 
                         size
-                      #+ median
-                      + mean_median
+                      + median
+                      #+ mean_median_diff
                       + skewness 
                       + kurtosis 
-                      #+ outliers_minor 
-                      #+ outliers_extream 
+                      #+ outliers_minor_ratio 
+                      #+ outliers_extream_ratio 
                       + sigma_1_ratio 
                       + sigma_2_ratio 
                       + sigma_3_ratio,
@@ -381,9 +382,18 @@ for( model in list(model_list$rf, model_list$svmRadialSigma)){
 
 #Error analysis
 ```{r eval = FALSE }
-file <- ""
-s <- paste("D:\master\thesis\simulation\data_3_mean-median\files\", file, sep = "")
+file <- "close_normal-t(10)-55"
+path <- paste("D:/master/ASDS860 - Thesis/thesis/simulation/data/not_scaled/files/", file, sep = "")
+path
+s <- read.delim(path, header = FALSE, sep = "\n")
 
+hist(s$V1)
+calc_stats(s$V1, scale(s$V1))
+sd(s$V1)
+
+rr <- rnorm(length(s$V1), mean(s$V1), sd(s$V1))
+hist(rr)
+calc_stats(rr, scale(rr))
 ```
 
 

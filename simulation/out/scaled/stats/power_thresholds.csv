@@ -1,0 +1,10 @@
+"","model","test_set","th_0.1","th_0.05","th_0.01"
+"1","rf","dev",0.35,0.45,0.65
+"2","rf","test",0.25,0.4,0.65
+"3","rf","unseen",0.3,0.45,0.7
+"4","gbm","dev",0.35,0.55,0.8
+"5","gbm","test",0.25,0.45,0.85
+"6","gbm","unseen",0.3,0.5,0.9
+"7","svmRadialSigma","dev",0.3,0.55,0.95
+"8","svmRadialSigma","test",0.2,0.35,0.95
+"9","svmRadialSigma","unseen",0.3,0.6,0.95

@@ -26,20 +26,21 @@ generate_samples<-function(sizes){
  
     size <- length(scaled_s)
     
-    stats = calc_stats(scaled_s)
+    stats = calc_stats(s, scaled_s)
     
     #sample_id
     sample_id <- paste(family, dist, size, sep = "-")
     
     data_set[nrow(data_set) + 1, ] = c(sample_id, family, dist, stats, alternative)
     
-    write(x = scaled_s, file = paste(data_files_dir, "/", sample_id, sep = ""), ncolumns = 1)
+    write(x = scaled_s, file = paste(data_files_dir, "/", sample_id, "_scaled", sep = ""), ncolumns = 1)
+    write(x = s, file = paste(data_files_dir, "/", sample_id, sep = ""), ncolumns = 1)
     
     return(data_set)
   }
   
   
-  data_set <- data.frame(sample_id=character(0), dist_family=character(0), dist=character(0), size=integer(0), mean=numeric(0), median=numeric(0), mean_median=numeric(0), sd=numeric(0), skewness=numeric(0), kurtosis=numeric(0), outliers_minor=integer(0), outliers_extream=integer(0), sigma_1_ratio=numeric(0), sigma_2_ratio=numeric(0), sigma_3_ratio=numeric(0), alternative=integer(0), stringsAsFactors = FALSE) 
+  data_set <- data.frame(sample_id=character(0), dist_family=character(0), dist=character(0), size=integer(0), mean=numeric(0), median=numeric(0), mean_median_diff=numeric(0), sd=numeric(0), skewness=numeric(0), kurtosis=numeric(0), outliers_minor_ratio=integer(0), outliers_extream_ratio=integer(0), sigma_1_ratio=numeric(0), sigma_2_ratio=numeric(0), sigma_3_ratio=numeric(0), alternative=integer(0), stringsAsFactors = FALSE) 
  
   
   for(size in sizes){
@@ -95,7 +96,7 @@ generate_samples<-function(sizes){
     set.seed(666)
     norm_mean = as.integer(runif(5, -1000, 1000))
     
-    norm_cov <- c(0.01, 0.1, 0.2, 0.4, 0.6) #coeffienent of variation
+    norm_cov <- c(0.01, 0.1, 0.3, 0.6, 1.0) #coeffienent of variation
     for(mu in norm_mean){
       for(cov in norm_cov){
         family <- paste("normal(", cov, ")", sep = "")

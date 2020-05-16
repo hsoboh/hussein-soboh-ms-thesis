@@ -13,7 +13,7 @@ source("utils.R")
 #util functions and constants
 ```{r}
 predict_score<-function(model, sample){
-  x <- calc_sample_features(sample)
+  x <- calc_stats(sample)
   pred <- predict( model, type = "prob", newdata = x)
   return(pred$class_1)
 }
@@ -25,9 +25,7 @@ get_power_threshold<-function(model, alpha){
 
 n_grid<-c(10,30, 50, 100, 200, 500, 1000)
 alph_grid<-c(0.01, 0.05, 0.1)
-test_grid<-c(model_names, "SW", "KS","AD", "CVM", "Lillie", "SF", "JB")   
-
-
+test_grid<-c(model_names, "SW", "KS","AD", "CVM", "Lillie", "SF", "JB")
 ```
 
 
@@ -41,18 +39,6 @@ for(name in model_names){
 }
 
 power_thresholds_df <- read.csv(power_thresholds_file)
-```
-
-```{r}
-library("nortest") #cvm, lillie, ad  
-s <- rt(100,3)
-s <- rnorm(100, 100, 10)
-print(ad.test(s))
-print(ks.test(s, "pnorm", mean=mean(s), sd = sd(s)))
-help(ks.test)
-
-f <- shapiro.test(s)
-f$statistic
 ```
 
 
@@ -74,12 +60,11 @@ test_is_alternative<-function(model, sample, alpha){
 
 normality_test<-function(n, dist, test, alpha, family){
   sample <- create_alternative_sample(dist = dist, size = n)
-  help(ks.test)
   if(test == "SW"){ #Shapiro
     test_result <- shapiro.test(sample)
     decision <- test_result$p.value <= alpha
   }else if (test == "KS"){#KS
-    test_result <- ks.test(sample, "pnorm", mean=mean(s), sd = sd(s))
+    test_result <- ks.test(sample, "pnorm", mean=mean(sample), sd = sd(sample))
     decision <- test_result$p.value <= alpha
   }else if (test == "AD"){ #Anderson Darling
     test_result <- ad.test(sample)  
@@ -115,8 +100,7 @@ run_test<-function(family, dists){
   param_list=list("n"=n_grid, "dist"=dist_grid, "test"=test_grid, "alpha"=alph_grid, "family"=family_grid)
   
   system.time({
-    MC_result<-MonteCarlo(func=normality_test, nrep=1000, param_list=param_list, ncpus = 1)#, max_grid = 5000, export_also = list("data"="power_thresholds_df")) 
-    
+    MC_result<-MonteCarlo(func=normality_test, nrep=1000, param_list=param_list, ncpus =1)#, max_grid = 5000)#, export_also = list("functions"=c("normality_test", "ks.test")))#, export_also = list("data"="power_thresholds_df") 
     saveRDS(MC_result, paste(power_dir, "/",family, ".rds", sep = ""))
     
     df<-MakeFrame(MC_result)
