@@ -132,6 +132,7 @@ train_models<-function(train_data){
       data = train_data,
       methodList = model_names,
       metric = "Accuracy",
+      tuneLength = 10,
       continue_on_fail = FALSE, 
       trControl = trControl)
   return(models)  
@@ -145,6 +146,8 @@ model_list <- train_models(train_set)
 
 for(model in model_list){
   print(model)
+  print(model$bestTune)
+  #plot(model)
 }
 
 ```

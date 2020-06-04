@@ -59,9 +59,9 @@ find_outliers<-function(data){
   return(outliers)
 }
 
-model_names <- c("rf")#, "gbm", "svmRadialSigma")
+model_names <- c("rf", "gbm", "svmRadial") 
 
-round <- "scaled"
+round <- "2_tuned"
 
 do_scaling <- TRUE
 
